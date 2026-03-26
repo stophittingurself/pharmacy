@@ -1,0 +1,48 @@
+# ============================================================
+# RBAC — Role-Based Access Control
+#
+# Зачем: ограничить, что может делать приложение внутри кластера
+# Принцип наименьших привилегий — бэкенд НЕ должен иметь
+# доступ к секретам других приложений или возможность создавать поды
+#
+# ServiceAccount → RoleBinding → Role
+# ============================================================
+
+# ServiceAccount для бэкенда
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ .Release.Name }}-backend-sa
+  labels:
+    app: {{ .Release.Name }}
+    component: backend
+
+---
+# Role — что можно делать
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ .Release.Name }}-backend-role
+rules:
+  # Бэкенд может только читать ConfigMaps и свои Secrets
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: ["{{ .Release.Name }}-db-secret"]
+    verbs: ["get"]
+
+---
+# RoleBinding — связываем ServiceAccount с Role
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ .Release.Name }}-backend-rolebinding
+subjects:
+  - kind: ServiceAccount
+    name: {{ .Release.Name }}-backend-sa
+roleRef:
+  kind: Role
+  name: {{ .Release.Name }}-backend-role
+  apiGroup: rbac.authorization.k8s.io

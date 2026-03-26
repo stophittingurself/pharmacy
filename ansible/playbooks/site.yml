@@ -1,0 +1,103 @@
+# ============================================================
+# site.yml — главный playbook
+#
+# Запуск:
+#   ansible-playbook -i inventory/hosts.ini playbooks/site.yml
+#
+# Только firewall:
+#   ansible-playbook -i inventory/hosts.ini playbooks/site.yml --tags firewall
+#
+# Только workers:
+#   ansible-playbook -i inventory/hosts.ini playbooks/site.yml --limit k8s_workers
+# ============================================================
+
+---
+- name: Configure all servers — base setup
+  hosts: all
+  become: yes
+  roles:
+    - common
+
+- name: Install Docker on K8s nodes
+  hosts: k8s
+  become: yes
+  tasks:
+    - name: Add Docker GPG key
+      apt_key:
+        url: https://download.docker.com/linux/ubuntu/gpg
+        state: present
+
+    - name: Add Docker repository
+      apt_repository:
+        repo: "deb https://download.docker.com/linux/ubuntu {{ ansible_distribution_release }} stable"
+        state: present
+
+    - name: Install containerd
+      apt:
+        name: containerd.io
+        state: present
+
+    - name: Configure containerd for K8s
+      shell: |
+        containerd config default > /etc/containerd/config.toml
+        sed -i 's/SystemdCgroup = false/SystemdCgroup = true/' /etc/containerd/config.toml
+      notify: restart containerd
+
+    - name: Enable containerd
+      systemd:
+        name: containerd
+        enabled: yes
+        state: started
+
+  handlers:
+    - name: restart containerd
+      systemd:
+        name: containerd
+        state: restarted
+
+- name: Install Node Exporter on all servers
+  hosts: all
+  become: yes
+  tasks:
+    - name: Download Node Exporter
+      get_url:
+        url: "https://github.com/prometheus/node_exporter/releases/download/v1.8.1/node_exporter-1.8.1.linux-amd64.tar.gz"
+        dest: /tmp/node_exporter.tar.gz
+
+    - name: Extract Node Exporter
+      unarchive:
+        src: /tmp/node_exporter.tar.gz
+        dest: /usr/local/bin/
+        remote_src: yes
+        extra_opts: [--strip-components=1]
+
+    - name: Create Node Exporter systemd service
+      copy:
+        content: |
+          [Unit]
+          Description=Prometheus Node Exporter
+          After=network.target
+
+          [Service]
+          Type=simple
+          User=node_exporter
+          ExecStart=/usr/local/bin/node_exporter
+          Restart=always
+
+          [Install]
+          WantedBy=multi-user.target
+        dest: /etc/systemd/system/node_exporter.service
+
+    - name: Create node_exporter user
+      user:
+        name: node_exporter
+        shell: /usr/sbin/nologin
+        system: yes
+        create_home: no
+
+    - name: Start Node Exporter
+      systemd:
+        name: node_exporter
+        enabled: yes
+        state: started
+        daemon_reload: yes

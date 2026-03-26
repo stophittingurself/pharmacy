@@ -1,0 +1,33 @@
+# ============================================================
+# values-stage.yaml — Staging окружение
+# Приближено к проду, но с меньшими ресурсами
+# ============================================================
+
+backend:
+  replicaCount: 2
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
+
+frontend:
+  replicaCount: 2
+
+postgres:
+  storage: 10Gi
+
+ingress:
+  host: stage.pharmacy.local
+  tls: false
+
+hpa:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 5
+  targetCPU: 75
+
+networkPolicy:
+  enabled: true

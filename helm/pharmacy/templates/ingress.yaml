@@ -1,0 +1,50 @@
+# ============================================================
+# Ingress — точка входа в кластер
+#
+# Как работает:
+#   Клиент → Ingress Controller (Nginx) → Service → Pod
+#
+# Ingress Controller должен быть установлен в кластере:
+#   helm install ingress-nginx ingress-nginx/ingress-nginx
+# ============================================================
+
+{{- if .Values.ingress.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ .Release.Name }}-ingress
+  labels:
+    app: {{ .Release.Name }}
+  annotations:
+    # Rate limiting
+    nginx.ingress.kubernetes.io/limit-rps: "50"
+    # Размер тела запроса (для POST)
+    nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+    # Redirect HTTP → HTTPS (когда включён TLS)
+    {{- if .Values.ingress.tls }}
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    # cert-manager автоматически выпустит сертификат
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    {{- end }}
+spec:
+  ingressClassName: {{ .Values.ingress.className }}
+  {{- if .Values.ingress.tls }}
+  tls:
+    - hosts:
+        - {{ .Values.ingress.host }}
+      secretName: {{ .Release.Name }}-tls
+  {{- end }}
+  rules:
+    - host: {{ .Values.ingress.host }}
+      http:
+        paths:
+          # Все запросы идут на frontend (Nginx),
+          # который проксирует /api/ на backend
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ .Release.Name }}-frontend
+                port:
+                  number: {{ .Values.frontend.service.port }}
+{{- end }}

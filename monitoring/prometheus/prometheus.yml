@@ -1,0 +1,46 @@
+# ============================================================
+# Prometheus — конфигурация сбора метрик
+#
+# Scrape targets:
+#   - backend: /metrics (custom app metrics)
+#   - prometheus: self-monitoring
+#   - node-exporter: метрики хоста (если добавишь позже)
+#
+# В K8s это заменится на ServiceMonitor (если используешь kube-prometheus-stack)
+# ============================================================
+
+global:
+  scrape_interval: 15s        # Как часто собирать метрики
+  evaluation_interval: 15s    # Как часто вычислять alerting rules
+  scrape_timeout: 10s
+
+# ─── Alertmanager (для Telegram-алертов) ───
+# alerting:
+#   alertmanagers:
+#     - static_configs:
+#         - targets: ['alertmanager:9093']
+
+# ─── Alert Rules ───
+rule_files:
+  # - "alerts/*.yml"
+
+# ─── Scrape Configs ───
+scrape_configs:
+  # Prometheus мониторит сам себя
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+  # Наш бэкенд
+  - job_name: 'pharmacy-backend'
+    metrics_path: /metrics
+    static_configs:
+      - targets: ['backend:8000']
+        labels:
+          service: 'pharmacy-api'
+          env: 'dev'
+
+  # Node Exporter (метрики хоста) — раскомментируй когда добавишь
+  # - job_name: 'node-exporter'
+  #   static_configs:
+  #     - targets: ['node-exporter:9100']

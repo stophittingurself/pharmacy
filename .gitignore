@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+*.egg-info/
+
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.backup
+*.tfvars       # НЕ коммить секреты! (envs/*.tfvars — пример, там нет паролей)
+!envs/*.tfvars
+
+# Docker
+.docker/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Secrets — НИКОГДА не коммить
+*.pem
+*.key
+kubeconfig
+.env

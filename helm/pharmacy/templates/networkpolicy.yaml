@@ -1,0 +1,124 @@
+# ============================================================
+# NetworkPolicy — сетевая изоляция подов
+#
+# Принцип: deny all, allow explicit
+# Без NetworkPolicy все поды могут общаться со всеми — небезопасно
+#
+# Что разрешаем:
+#   - frontend → backend (порт 8000)
+#   - backend → postgres (порт 5432)
+#   - ingress → frontend (порт 80)
+#   - prometheus → backend (порт 8000, /metrics)
+#
+# Требование: CNI должен поддерживать NetworkPolicy
+#   (Calico, Cilium, Weave Net — поддерживают)
+#   (Flannel — НЕ поддерживает)
+# ============================================================
+
+{{- if .Values.networkPolicy.enabled }}
+
+# --- Backend: принимает трафик только от frontend и prometheus ---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .Release.Name }}-backend-netpol
+spec:
+  podSelector:
+    matchLabels:
+      app: {{ .Release.Name }}
+      component: backend
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # От frontend
+    - from:
+        - podSelector:
+            matchLabels:
+              component: frontend
+      ports:
+        - port: 8000
+    # От Prometheus (по label)
+    - from:
+        - namespaceSelector: {}
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: prometheus
+      ports:
+        - port: 8000
+  egress:
+    # К PostgreSQL
+    - to:
+        - podSelector:
+            matchLabels:
+              component: postgres
+      ports:
+        - port: 5432
+    # DNS (kube-dns)
+    - to: []
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+
+---
+# --- PostgreSQL: принимает трафик только от backend ---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .Release.Name }}-postgres-netpol
+spec:
+  podSelector:
+    matchLabels:
+      app: {{ .Release.Name }}
+      component: postgres
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              component: backend
+      ports:
+        - port: 5432
+
+---
+# --- Frontend: принимает трафик от Ingress Controller ---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .Release.Name }}-frontend-netpol
+spec:
+  podSelector:
+    matchLabels:
+      app: {{ .Release.Name }}
+      component: frontend
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # От Ingress Controller (обычно в namespace ingress-nginx)
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+      ports:
+        - port: 80
+  egress:
+    # К backend
+    - to:
+        - podSelector:
+            matchLabels:
+              component: backend
+      ports:
+        - port: 8000
+    # DNS
+    - to: []
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+
+{{- end }}

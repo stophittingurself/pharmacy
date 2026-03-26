@@ -1,0 +1,12 @@
+[project]
+name = "backend"
+version = "0.1.0"
+requires-python = ">=3.13"
+dependencies = [
+    "fastapi>=0.110.0",
+    "prometheus-client>=0.20.0",
+    "psycopg[binary,pool]>=3.1.0",
+    "pydantic>=2.7.0",
+    "sqlalchemy>=2.0.30",
+    "uvicorn[standard]>=0.29.0",
+]

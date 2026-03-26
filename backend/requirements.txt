@@ -1,0 +1,20 @@
+# ============================================================
+# requirements.txt — pinned to latest stable versions
+#
+# Use >= lower bounds so `uv pip install` resolves to latest.
+# Update by running: uv pip install -r requirements.txt --upgrade
+# ============================================================
+
+# Web framework + ASGI server
+fastapi>=0.110.0
+uvicorn[standard]>=0.29.0    # [standard] = uvloop + httptools for performance
+
+# ORM + PostgreSQL driver
+sqlalchemy>=2.0.30            # SQLAlchemy 2.0 modern style (Mapped, mapped_column)
+psycopg[binary,pool]>=3.1.0  # psycopg v3 — sync + async, built-in connection pool
+
+# Validation
+pydantic>=2.7.0               # Pydantic v2 (ConfigDict, model_dump)
+
+# Monitoring
+prometheus-client>=0.20.0     # Prometheus metrics export

@@ -1,0 +1,118 @@
+# ============================================================
+# Docker Compose — local development stack
+#
+# Services:
+#   postgres   → database
+#   backend    → FastAPI (waits for healthy postgres)
+#   frontend   → Nginx + static dashboard (proxies /api → backend)
+#   prometheus → metrics collection
+#   grafana    → visualization (Prometheus datasource auto-provisioned)
+#
+# Usage:
+#   docker compose up -d --build
+#   docker compose logs -f backend
+#   docker compose down -v    # remove volumes too
+# ============================================================
+
+services:
+
+  # ─── PostgreSQL 17 ───
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: pharmacy_db
+      POSTGRES_USER: pharmacy
+      POSTGRES_PASSWORD: pharmacy_pass
+    ports:
+      - "5432:5432"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pharmacy -d pharmacy_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - pharmacy-net
+
+  # ─── Backend (FastAPI) ───
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: "postgresql+psycopg://pharmacy:pharmacy_pass@postgres:5432/pharmacy_db"
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    networks:
+      - pharmacy-net
+
+  # ─── Frontend (Nginx) ───
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - pharmacy-net
+
+  # ─── Prometheus ───
+  prometheus:
+    image: prom/prometheus:v2.53.0
+    restart: unless-stopped
+    volumes:
+      - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    ports:
+      - "9090:9090"
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.retention.time=15d'
+      - '--web.enable-lifecycle'
+    networks:
+      - pharmacy-net
+
+  # ─── Grafana ───
+  grafana:
+    image: grafana/grafana:11.1.0
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ./monitoring/grafana/datasources:/etc/grafana/provisioning/datasources:ro
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
+    networks:
+      - pharmacy-net
+
+volumes:
+  pg_data:
+  prometheus_data:
+  grafana_data:
+
+networks:
+  pharmacy-net:
+    driver: bridge

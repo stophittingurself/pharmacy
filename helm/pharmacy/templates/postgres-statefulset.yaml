@@ -1,0 +1,108 @@
+# ============================================================
+# PostgreSQL StatefulSet
+#
+# Почему StatefulSet, а не Deployment?
+# → БД нужен стабильный hostname и persistent storage
+# → При рестарте под получает тот же PVC с данными
+#
+# В реальном проде лучше использовать managed PostgreSQL
+# (AWS RDS, Yandex MDB, Azure Database), но для практики — ок
+# ============================================================
+
+{{- if .Values.postgres.enabled }}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ .Release.Name }}-postgres
+  labels:
+    app: {{ .Release.Name }}
+    component: postgres
+spec:
+  serviceName: {{ .Release.Name }}-postgres
+  replicas: 1  # Одна реплика (master). Для HA нужен Patroni / CloudNativePG
+  selector:
+    matchLabels:
+      app: {{ .Release.Name }}
+      component: postgres
+  template:
+    metadata:
+      labels:
+        app: {{ .Release.Name }}
+        component: postgres
+    spec:
+      containers:
+        - name: postgres
+          image: {{ .Values.postgres.image }}
+          ports:
+            - containerPort: 5432
+          env:
+            - name: POSTGRES_DB
+              value: {{ .Values.postgres.credentials.database }}
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Release.Name }}-db-secret
+                  key: username
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Release.Name }}-db-secret
+                  key: password
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          volumeMounts:
+            - name: postgres-storage
+              mountPath: /var/lib/postgresql/data
+          livenessProbe:
+            exec:
+              command:
+                - pg_isready
+                - -U
+                - {{ .Values.postgres.credentials.username }}
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          readinessProbe:
+            exec:
+              command:
+                - pg_isready
+                - -U
+                - {{ .Values.postgres.credentials.username }}
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+  # PVC Template — каждый pod StatefulSet получает свой PVC
+  volumeClaimTemplates:
+    - metadata:
+        name: postgres-storage
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- if .Values.postgres.storageClass }}
+        storageClassName: {{ .Values.postgres.storageClass }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.postgres.storage }}
+---
+# Headless Service для StatefulSet
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-postgres
+  labels:
+    app: {{ .Release.Name }}
+    component: postgres
+spec:
+  type: ClusterIP
+  ports:
+    - port: 5432
+      targetPort: 5432
+  selector:
+    app: {{ .Release.Name }}
+    component: postgres
+{{- end }}

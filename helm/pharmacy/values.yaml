@@ -1,0 +1,76 @@
+# ============================================================
+# values.yaml — базовые значения (переопределяются в values-*.yaml)
+# ============================================================
+
+# ─── Backend ───
+backend:
+  replicaCount: 2
+  image:
+    repository: harbor.pharmacy.local/pharmacy/backend
+    tag: latest
+    pullPolicy: IfNotPresent
+  service:
+    type: ClusterIP
+    port: 8000
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
+  env:
+    DATABASE_URL: "postgresql+psycopg://pharmacy:pharmacy_pass@pharmacy-postgres:5432/pharmacy_db"
+
+# ─── Frontend ───
+frontend:
+  replicaCount: 2
+  image:
+    repository: harbor.pharmacy.local/pharmacy/frontend
+    tag: latest
+    pullPolicy: IfNotPresent
+  service:
+    type: ClusterIP
+    port: 80
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 128Mi
+
+# ─── PostgreSQL ───
+postgres:
+  enabled: true
+  image: postgres:16-alpine
+  storage: 10Gi
+  storageClass: ""  # default StorageClass
+  credentials:
+    database: pharmacy_db
+    username: pharmacy
+    password: pharmacy_pass  # В проде используй External Secrets / Sealed Secrets!
+
+# ─── Ingress ───
+ingress:
+  enabled: true
+  className: nginx
+  host: pharmacy.local
+  tls: false
+
+# ─── HPA (Horizontal Pod Autoscaler) ───
+hpa:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPU: 70
+  targetMemory: 80
+
+# ─── Network Policy ───
+networkPolicy:
+  enabled: true
+
+# ─── Monitoring ───
+monitoring:
+  enabled: true
+  serviceMonitor: false  # true если установлен kube-prometheus-stack

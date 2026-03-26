@@ -1,0 +1,77 @@
+# ============================================================
+# k8s/tasks/main.yml — Подготовка нод для Kubernetes
+#
+# Не устанавливает сам кластер (для этого kubeadm init отдельно),
+# но готовит ноды: ядро, модули, kubeadm/kubelet/kubectl
+# ============================================================
+
+---
+# ─── Отключить swap (K8s не работает со swap) ───
+- name: Отключить swap
+  command: swapoff -a
+  changed_when: false
+
+- name: Убрать swap из fstab
+  lineinfile:
+    path: /etc/fstab
+    regexp: '\sswap\s'
+    state: absent
+
+# ─── Загрузить kernel-модули ───
+- name: Загрузить br_netfilter и overlay
+  modprobe:
+    name: "{{ item }}"
+    state: present
+  loop:
+    - br_netfilter
+    - overlay
+
+- name: Сделать модули persistent
+  copy:
+    dest: /etc/modules-load.d/k8s.conf
+    content: |
+      br_netfilter
+      overlay
+
+# ─── Установить kubeadm, kubelet, kubectl ───
+- name: Добавить Kubernetes GPG ключ
+  apt_key:
+    url: https://pkgs.k8s.io/core:/stable:/v1.30/deb/Release.key
+    state: present
+
+- name: Добавить Kubernetes apt репозиторий
+  apt_repository:
+    repo: "deb https://pkgs.k8s.io/core:/stable:/v1.30/deb/ /"
+    state: present
+    update_cache: yes
+
+- name: Установить kubeadm, kubelet, kubectl
+  apt:
+    name:
+      - kubelet=1.30.*
+      - kubeadm=1.30.*
+      - kubectl=1.30.*
+    state: present
+
+- name: Зафиксировать версии (apt hold)
+  dpkg_selections:
+    name: "{{ item }}"
+    selection: hold
+  loop:
+    - kubelet
+    - kubeadm
+    - kubectl
+
+- name: Включить kubelet
+  systemd:
+    name: kubelet
+    state: started
+    enabled: yes
+
+# ─── Установить Helm (на master-нодах) ───
+- name: Установить Helm
+  shell: |
+    curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+  args:
+    creates: /usr/local/bin/helm
+  when: "'k8s_masters' in group_names"

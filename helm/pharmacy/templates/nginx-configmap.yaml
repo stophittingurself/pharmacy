@@ -1,0 +1,41 @@
+# ============================================================
+# Nginx ConfigMap — конфиг для K8s
+# Отличие от Docker Compose: backend → {{ .Release.Name }}-backend
+# В K8s сервисы доступны по имени Service
+# ============================================================
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-nginx-config
+data:
+  pharmacy.conf: |
+    server {
+        listen 80;
+        server_name _;
+
+        root /usr/share/nginx/html;
+        index index.html;
+
+        location / {
+            try_files $uri $uri/ /index.html;
+        }
+
+        location /api/ {
+            proxy_pass http://{{ .Release.Name }}-backend:{{ .Values.backend.service.port }}/api/;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $scheme;
+            proxy_connect_timeout 5s;
+            proxy_read_timeout 30s;
+        }
+
+        location /metrics {
+            proxy_pass http://{{ .Release.Name }}-backend:{{ .Values.backend.service.port }}/metrics;
+        }
+
+        gzip on;
+        gzip_types text/plain text/css application/json application/javascript;
+        gzip_min_length 256;
+    }

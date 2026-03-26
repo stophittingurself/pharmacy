@@ -1,0 +1,206 @@
+# ============================================================
+# GitLab CI/CD — пайплайн аптечной сети
+#
+# Стейджи:
+#   1. lint     — проверка кода (линтеры, секьюрити)
+#   2. test     — юнит-тесты
+#   3. build    — сборка Docker-образов + пуш в Harbor
+#   4. deploy   — деплой через Helm в K8s
+#
+# Кэширование: pip cache + Docker layer cache → быстрые пайплайны
+# ============================================================
+
+stages:
+  - lint
+  - test
+  - build
+  - deploy
+
+variables:
+  # Harbor registry (замени на свой)
+  REGISTRY: harbor.pharmacy.local
+  BACKEND_IMAGE: ${REGISTRY}/pharmacy/backend
+  FRONTEND_IMAGE: ${REGISTRY}/pharmacy/frontend
+  # Helm
+  HELM_RELEASE: pharmacy
+  # Кэш Docker слоёв
+  DOCKER_BUILDKIT: "1"
+
+# ─── Кэш pip (ускоряет lint/test стейджи) ───
+.pip-cache: &pip-cache
+  cache:
+    key: pip-${CI_COMMIT_REF_SLUG}
+    paths:
+      - .pip-cache/
+  variables:
+    PIP_CACHE_DIR: "$CI_PROJECT_DIR/.pip-cache"
+
+# ══════════════════════════════════════════════
+# Stage 1: LINT
+# ══════════════════════════════════════════════
+
+python-lint:
+  stage: lint
+  image: python:3.12-slim
+  <<: *pip-cache
+  before_script:
+    - pip install ruff bandit
+  script:
+    - echo "=== Ruff (линтер + форматирование) ==="
+    - ruff check backend/app/
+    - echo "=== Bandit (security) ==="
+    - bandit -r backend/app/ -ll
+  allow_failure: false
+
+helm-lint:
+  stage: lint
+  image:
+    name: alpine/helm:3.15
+    entrypoint: [""]
+  script:
+    - helm lint helm/pharmacy/
+    - helm template pharmacy helm/pharmacy/ --values helm/pharmacy/values-dev.yaml > /dev/null
+
+dockerfile-lint:
+  stage: lint
+  image: hadolint/hadolint:latest-debian
+  script:
+    - hadolint backend/Dockerfile
+    - hadolint frontend/Dockerfile
+  allow_failure: true  # не блокирует, но показывает проблемы
+
+# ══════════════════════════════════════════════
+# Stage 2: TEST
+# ══════════════════════════════════════════════
+
+backend-test:
+  stage: test
+  image: python:3.12-slim
+  <<: *pip-cache
+  services:
+    - name: postgres:16-alpine
+      alias: test-db
+      variables:
+        POSTGRES_DB: test_db
+        POSTGRES_USER: test
+        POSTGRES_PASSWORD: test
+  variables:
+    DATABASE_URL: "postgresql+psycopg://test:test@test-db:5432/test_db"
+  before_script:
+    - pip install -r backend/requirements.txt
+    - pip install pytest httpx
+  script:
+    - cd backend
+    - python -m pytest tests/ -v --tb=short
+  allow_failure: false
+
+# ══════════════════════════════════════════════
+# Stage 3: BUILD
+# ══════════════════════════════════════════════
+
+.docker-build: &docker-build
+  stage: build
+  image: docker:27
+  services:
+    - docker:27-dind
+  variables:
+    DOCKER_TLS_CERTDIR: "/certs"
+  before_script:
+    # Логин в Harbor
+    - echo "$HARBOR_PASSWORD" | docker login $REGISTRY -u "$HARBOR_USER" --password-stdin
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
+    - if: '$CI_COMMIT_BRANCH == "develop"'
+
+build-backend:
+  <<: *docker-build
+  script:
+    - |
+      docker build \
+        --cache-from ${BACKEND_IMAGE}:latest \
+        --build-arg BUILDKIT_INLINE_CACHE=1 \
+        -t ${BACKEND_IMAGE}:${CI_COMMIT_SHORT_SHA} \
+        -t ${BACKEND_IMAGE}:latest \
+        backend/
+    - docker push ${BACKEND_IMAGE}:${CI_COMMIT_SHORT_SHA}
+    - docker push ${BACKEND_IMAGE}:latest
+
+build-frontend:
+  <<: *docker-build
+  script:
+    - |
+      docker build \
+        --cache-from ${FRONTEND_IMAGE}:latest \
+        --build-arg BUILDKIT_INLINE_CACHE=1 \
+        -t ${FRONTEND_IMAGE}:${CI_COMMIT_SHORT_SHA} \
+        -t ${FRONTEND_IMAGE}:latest \
+        frontend/
+    - docker push ${FRONTEND_IMAGE}:${CI_COMMIT_SHORT_SHA}
+    - docker push ${FRONTEND_IMAGE}:latest
+
+# ══════════════════════════════════════════════
+# Stage 4: DEPLOY
+# ══════════════════════════════════════════════
+
+.deploy-base: &deploy-base
+  stage: deploy
+  image:
+    name: alpine/helm:3.15
+    entrypoint: [""]
+  before_script:
+    # Kubectl config берётся из CI/CD переменной (Settings → CI/CD → Variables)
+    - mkdir -p $HOME/.kube
+    - echo "$KUBE_CONFIG" | base64 -d > $HOME/.kube/config
+
+deploy-dev:
+  <<: *deploy-base
+  script:
+    - |
+      helm upgrade --install ${HELM_RELEASE} helm/pharmacy/ \
+        --namespace pharmacy-dev \
+        --create-namespace \
+        --values helm/pharmacy/values-dev.yaml \
+        --set backend.image.tag=${CI_COMMIT_SHORT_SHA} \
+        --set frontend.image.tag=${CI_COMMIT_SHORT_SHA} \
+        --wait --timeout 5m
+  environment:
+    name: dev
+    url: https://dev.pharmacy.local
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "develop"'
+
+deploy-staging:
+  <<: *deploy-base
+  script:
+    - |
+      helm upgrade --install ${HELM_RELEASE} helm/pharmacy/ \
+        --namespace pharmacy-stage \
+        --create-namespace \
+        --values helm/pharmacy/values-stage.yaml \
+        --set backend.image.tag=${CI_COMMIT_SHORT_SHA} \
+        --set frontend.image.tag=${CI_COMMIT_SHORT_SHA} \
+        --wait --timeout 5m
+  environment:
+    name: staging
+    url: https://stage.pharmacy.local
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
+  needs: ["build-backend", "build-frontend"]
+
+deploy-prod:
+  <<: *deploy-base
+  script:
+    - |
+      helm upgrade --install ${HELM_RELEASE} helm/pharmacy/ \
+        --namespace pharmacy-prod \
+        --values helm/pharmacy/values-prod.yaml \
+        --set backend.image.tag=${CI_COMMIT_SHORT_SHA} \
+        --set frontend.image.tag=${CI_COMMIT_SHORT_SHA} \
+        --wait --timeout 10m
+  environment:
+    name: production
+    url: https://pharmacy.local
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
+      when: manual  # Ручной деплой в прод — кнопка в GitLab
+  needs: ["deploy-staging"]

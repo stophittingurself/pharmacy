@@ -1,0 +1,202 @@
+# ============================================================
+# Common Role — базовая настройка серверов
+#
+# Что делает:
+#   1. Обновляет пакеты
+#   2. Устанавливает базовое ПО
+#   3. Настраивает firewall (UFW)
+#   4. Настраивает NTP
+#   5. Настраивает LVM (если нужно)
+#   6. Hardening — базовая безопасность
+#
+# Это именно то, что ты описал в резюме:
+# "Управление конфигурацией серверов с помощью Ansible:
+#  установка ПО, firewall, LVM, NFS"
+# ============================================================
+
+---
+# 1. Обновление системы
+- name: Update apt cache
+  apt:
+    update_cache: yes
+    cache_valid_time: 3600
+  tags: [update]
+
+- name: Upgrade all packages
+  apt:
+    upgrade: safe
+  tags: [update]
+
+# 2. Установка базового ПО
+- name: Install essential packages
+  apt:
+    name:
+      - curl
+      - wget
+      - git
+      - vim
+      - htop
+      - iotop
+      - net-tools
+      - dnsutils
+      - jq
+      - unzip
+      - ca-certificates
+      - gnupg
+      - lsb-release
+      - ntp
+      - ufw
+      - lvm2
+      - nfs-common
+      - python3-pip
+      - fail2ban
+    state: present
+  tags: [packages]
+
+# 3. Настройка Firewall (UFW)
+- name: Set UFW default policy — deny incoming
+  ufw:
+    direction: incoming
+    policy: deny
+  tags: [firewall]
+
+- name: Set UFW default policy — allow outgoing
+  ufw:
+    direction: outgoing
+    policy: allow
+  tags: [firewall]
+
+- name: Allow SSH
+  ufw:
+    rule: allow
+    port: "22"
+    proto: tcp
+  tags: [firewall]
+
+- name: Allow Kubernetes API (masters only)
+  ufw:
+    rule: allow
+    port: "6443"
+    proto: tcp
+  when: "'k8s_masters' in group_names"
+  tags: [firewall]
+
+- name: Allow Kubelet
+  ufw:
+    rule: allow
+    port: "10250"
+    proto: tcp
+  when: "'k8s' in group_names"
+  tags: [firewall]
+
+- name: Allow NodePort range
+  ufw:
+    rule: allow
+    port: "30000:32767"
+    proto: tcp
+  when: "'k8s_workers' in group_names"
+  tags: [firewall]
+
+- name: Allow Prometheus Node Exporter
+  ufw:
+    rule: allow
+    port: "9100"
+    proto: tcp
+    from_ip: "10.0.1.30"  # Только с мониторинг-сервера
+  tags: [firewall]
+
+- name: Enable UFW
+  ufw:
+    state: enabled
+  tags: [firewall]
+
+# 4. NTP — синхронизация времени (критично для K8s и логов)
+- name: Configure NTP
+  copy:
+    content: |
+      # Серверы времени Казахстана
+      server ntp.nic.kz iburst
+      server 0.asia.pool.ntp.org iburst
+      server 1.asia.pool.ntp.org iburst
+    dest: /etc/ntp.conf
+  notify: restart ntp
+  tags: [ntp]
+
+# 5. Hardening
+- name: Disable root SSH login
+  lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: '^PermitRootLogin'
+    line: 'PermitRootLogin no'
+  notify: restart sshd
+  tags: [security]
+
+- name: Disable password authentication
+  lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: '^PasswordAuthentication'
+    line: 'PasswordAuthentication no'
+  notify: restart sshd
+  tags: [security]
+
+- name: Set sysctl params for K8s
+  sysctl:
+    name: "{{ item.key }}"
+    value: "{{ item.value }}"
+    sysctl_file: /etc/sysctl.d/99-kubernetes.conf
+    reload: yes
+  loop:
+    - { key: 'net.bridge.bridge-nf-call-iptables', value: '1' }
+    - { key: 'net.bridge.bridge-nf-call-ip6tables', value: '1' }
+    - { key: 'net.ipv4.ip_forward', value: '1' }
+    - { key: 'vm.swappiness', value: '0' }
+  when: "'k8s' in group_names"
+  tags: [sysctl]
+
+# 6. Fail2ban — защита от brute-force SSH
+- name: Configure fail2ban
+  copy:
+    content: |
+      [DEFAULT]
+      bantime = 3600
+      findtime = 600
+      maxretry = 5
+
+      [sshd]
+      enabled = true
+      port = ssh
+      filter = sshd
+      logpath = /var/log/auth.log
+    dest: /etc/fail2ban/jail.local
+  notify: restart fail2ban
+  tags: [security]
+
+# 7. Swap off (требование K8s)
+- name: Disable swap
+  command: swapoff -a
+  when: "'k8s' in group_names"
+  tags: [kubernetes]
+
+- name: Remove swap from fstab
+  lineinfile:
+    path: /etc/fstab
+    regexp: '\sswap\s'
+    state: absent
+  when: "'k8s' in group_names"
+  tags: [kubernetes]
+
+# 8. LVM — расширение диска (если нужно)
+- name: Create LVM volume group for data
+  lvg:
+    vg: data-vg
+    pvs: /dev/sdb
+  when: lvm_data_disk is defined
+  tags: [lvm]
+
+- name: Create logical volume for data
+  lvol:
+    vg: data-vg
+    lv: data-lv
+    size: 100%FREE
+  when: lvm_data_disk is defined
+  tags: [lvm]

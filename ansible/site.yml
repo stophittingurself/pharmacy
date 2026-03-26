@@ -1,0 +1,133 @@
+# ============================================================
+# site.yml — главный плейбук
+#
+# Запуск:
+#   ansible-playbook -i inventory/hosts.ini site.yml
+#
+# Что делает:
+#   1. Базовая настройка всех серверов (common role)
+#   2. Установка Docker на все K8s ноды
+#   3. Настройка firewall
+#   4. Установка мониторинга
+# ============================================================
+
+---
+- name: Базовая настройка всех серверов
+  hosts: all
+  become: true
+  roles:
+    - common
+
+- name: Настройка K8s нод
+  hosts: k8s
+  become: true
+  tasks:
+    - name: Установка необходимых пакетов
+      apt:
+        name:
+          - apt-transport-https
+          - ca-certificates
+          - curl
+          - gnupg
+          - lsb-release
+          - software-properties-common
+        state: present
+        update_cache: true
+
+    - name: Добавление GPG-ключа Docker
+      apt_key:
+        url: https://download.docker.com/linux/ubuntu/gpg
+        state: present
+
+    - name: Добавление Docker-репозитория
+      apt_repository:
+        repo: "deb [arch=amd64] https://download.docker.com/linux/ubuntu {{ ansible_distribution_release }} stable"
+        state: present
+
+    - name: Установка Docker
+      apt:
+        name:
+          - docker-ce
+          - docker-ce-cli
+          - containerd.io
+        state: present
+        update_cache: true
+
+    - name: Добавление пользователя deploy в группу docker
+      user:
+        name: deploy
+        groups: docker
+        append: true
+
+    - name: Включение и запуск Docker
+      systemd:
+        name: docker
+        state: started
+        enabled: true
+
+    - name: Настройка Docker daemon (cgroup driver, log rotation)
+      copy:
+        content: |
+          {
+            "exec-opts": ["native.cgroupdriver=systemd"],
+            "log-driver": "json-file",
+            "log-opts": {
+              "max-size": "50m",
+              "max-file": "3"
+            },
+            "storage-driver": "overlay2"
+          }
+        dest: /etc/docker/daemon.json
+      notify: restart docker
+
+  handlers:
+    - name: restart docker
+      systemd:
+        name: docker
+        state: restarted
+
+- name: Настройка firewall на K8s нодах
+  hosts: k8s
+  become: true
+  tasks:
+    - name: Установка UFW
+      apt:
+        name: ufw
+        state: present
+
+    - name: Разрешение SSH
+      ufw:
+        rule: allow
+        port: "22"
+        proto: tcp
+
+    - name: Разрешение Kubernetes API
+      ufw:
+        rule: allow
+        port: "6443"
+        proto: tcp
+      when: inventory_hostname in groups['k8s_masters']
+
+    - name: Разрешение kubelet
+      ufw:
+        rule: allow
+        port: "10250"
+        proto: tcp
+
+    - name: Разрешение NodePort range
+      ufw:
+        rule: allow
+        port: "30000:32767"
+        proto: tcp
+
+    - name: Разрешение Flannel/Calico VXLAN
+      ufw:
+        rule: allow
+        port: "8472"
+        proto: udp
+
+    - name: Включение UFW
+      ufw:
+        state: enabled
+        policy: deny
+        direction: incoming

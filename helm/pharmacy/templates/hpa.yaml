@@ -1,0 +1,54 @@
+# ============================================================
+# HPA — Horizontal Pod Autoscaler
+#
+# Автоматически масштабирует поды бэкенда по нагрузке:
+#   CPU > 70% → добавляет поды
+#   CPU < 70% → убирает лишние (но не ниже minReplicas)
+#
+# Требование: в кластере должен быть metrics-server
+#   kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/...
+# ============================================================
+
+{{- if .Values.hpa.enabled }}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ .Release.Name }}-backend-hpa
+  labels:
+    app: {{ .Release.Name }}
+    component: backend
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ .Release.Name }}-backend
+  minReplicas: {{ .Values.hpa.minReplicas }}
+  maxReplicas: {{ .Values.hpa.maxReplicas }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.hpa.targetCPU }}
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.hpa.targetMemory }}
+  behavior:
+    # Не скейлим слишком агрессивно
+    scaleUp:
+      stabilizationWindowSeconds: 60    # Ждём минуту перед добавлением подов
+      policies:
+        - type: Pods
+          value: 2                       # Максимум +2 пода за раз
+          periodSeconds: 60
+    scaleDown:
+      stabilizationWindowSeconds: 300    # Ждём 5 минут перед удалением подов
+      policies:
+        - type: Pods
+          value: 1                       # Убираем по 1 поду за раз
+          periodSeconds: 120
+{{- end }}
